@@ -1,8 +1,9 @@
 #pragma once
 #include <vector>
-#include <deque>
-#include <mutex>
-#include <thread>
+#include <queue>
+#include <pthread.h>
+#include <semaphore.h>
+#include <fstream>
 #include "CTPAPI/ThostFtdcMdApi.h"
 #include "tscns.h"
 

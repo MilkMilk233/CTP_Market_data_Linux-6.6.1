@@ -1,6 +1,4 @@
 #include <iostream>
-#include <fstream>
-#include <unordered_map>
 #include "CustomMdSpi.h"
 #include <string.h>
 #include <unistd.h>
@@ -14,6 +12,10 @@ extern TThostFtdcPasswordType gInvesterPassword; // 投资者密码
 extern char *g_pInstrumentID[];                  // 行情合约代码列表
 extern int instrumentNum;                        // 行情合约订阅数量
 extern TSCNS tscns;								 // 高精度时钟
+extern pthread_mutex_t wd_list_lock;		 	 // 合约信息队列锁
+extern sem_t wd_quota;			 	 			 // 队列管理信号量
+extern std::queue<std::pair<CThostFtdcDepthMarketDataField, int64_t>> wd_list;  // 用于存放深度行情信息的队列
+
 
 // ---- ctp_api回调函数 ---- //
 // 连接成功应答
@@ -130,56 +132,15 @@ void CustomMdSpi::OnRspSubMarketData(
 		std::cerr << "返回错误--->>> ErrorID=" << pRspInfo->ErrorID << ", ErrorMsg=" << pRspInfo->ErrorMsg << std::endl;
 }
 
-time_t convertTimeStr2TimeStamp(std::string time1, std::string time2){
-    struct tm timeinfo;
-	std::string timeStr = time1 + time2;
-    strptime(timeStr.c_str(), "%Y%m%d%H:%M:%S",  &timeinfo);
-    return mktime(&timeinfo);
-}
-
 // 行情详情通知
 void CustomMdSpi::OnRtnDepthMarketData(CThostFtdcDepthMarketDataField *pDepthMarketData)
 {
 	int64_t tsc = tscns.rdtsc();
-	int64_t ns = tscns.tsc2ns(tsc);
-	std::string t_date =  pDepthMarketData->TradingDay;
-	std::string t_time = pDepthMarketData->UpdateTime;
-	time_t fetchtime = convertTimeStr2TimeStamp(t_date, t_time);
-	int msec = pDepthMarketData->UpdateMillisec;
-	fetchtime *= 1000000000;
-	if(msec == 500){
-		fetchtime += 500000000;
-	}
-	std::cout << fetchtime << std::endl;
-	char filePath[100] = {'\0'};
-	sprintf(filePath, "./stats/%s_market_data.csv", pDepthMarketData->InstrumentID);
-	std::ofstream outFile;
-	outFile.open(filePath, std::ios::app); // 文件追加写入 
-	outFile << pDepthMarketData->TradingDay << "," 
-		<< pDepthMarketData->InstrumentID << "," 
-		<< pDepthMarketData->ExchangeID << "," 
-		<< pDepthMarketData->ExchangeInstID << "," 
-		<< pDepthMarketData->LastPrice << "," 
-		<< pDepthMarketData->PreSettlementPrice << "," 
-		<< pDepthMarketData->PreClosePrice << "," 
-		<< pDepthMarketData->PreOpenInterest << "," 
-		<< pDepthMarketData->OpenPrice << "," 
-		<< pDepthMarketData->HighestPrice << "," 
-		<< pDepthMarketData->LowestPrice << "," 
-		<< pDepthMarketData->Volume << "," 
-		<< pDepthMarketData->OpenInterest << "," 
-		<< pDepthMarketData->ClosePrice << "," 
-		<< pDepthMarketData->UpperLimitPrice << "," 
-		<< pDepthMarketData->LowerLimitPrice << "," 
-		<< pDepthMarketData->UpdateTime << "," 
-		<< pDepthMarketData->UpdateMillisec << "," 
-		<< pDepthMarketData->BidPrice1 << "," 
-		<< pDepthMarketData->BidVolume1 << "," 
-		<< pDepthMarketData->AskPrice1 << "," 
-		<< pDepthMarketData->AskVolume1 << ","
-		<< fetchtime << ","
-		<< ns << std::endl;
-	outFile.close();
+	CThostFtdcDepthMarketDataField wd_info = *pDepthMarketData;
+	pthread_mutex_lock(&wd_list_lock);
+	wd_list.emplace(std::make_pair(wd_info, tsc));
+	pthread_mutex_unlock(&wd_list_lock);
+	sem_post(&wd_quota);
 }
 
 // Skipped functions
